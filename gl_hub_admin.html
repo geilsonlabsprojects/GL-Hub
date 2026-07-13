@@ -1,0 +1,1268 @@
+<!DOCTYPE html>
+<html lang="pt-PT" class="transition-colors duration-300 h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GL Hub Admin</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['Inter', 'sans-serif'] },
+                    colors: {
+                        surface: { variant: '#f1f5f9', hover: '#e2e8f0' }
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet">
+    
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+        
+        body { font-family: 'Inter', sans-serif; }
+        
+        /* Barra de rolagem personalizada */
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        .dark .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+        /* Animações e Transições */
+        .fade-in { animation: fadeIn 0.25s ease-out forwards; }
+        .slide-up { animation: slideUp 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes slideUp { 
+            from { opacity: 0; transform: translateY(16px); } 
+            to { opacity: 1; transform: translateY(0); } 
+        }
+
+        /* Efeito de Vidro Fosco (Glassmorphism) */
+        .glass { background: rgba(255, 255, 255, 0.85); backdrop-filter: blur(12px); }
+        .dark .glass { background: rgba(26, 26, 26, 0.85); backdrop-filter: blur(12px); }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-900 dark:bg-[#121212] dark:text-gray-100 flex flex-col min-h-screen w-full overflow-hidden">
+
+    <!-- Contentor Raiz da Aplicação -->
+    <div id="app-root" class="w-full h-full flex flex-col flex-1"></div>
+
+    <!-- Contentor Global para Toasts (Notificações) -->
+    <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-3 max-w-md w-full pointer-events-none"></div>
+
+    <!-- Lógica do Firebase e Aplicação -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-app.js";
+        import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-auth.js";
+        import { getDatabase, ref, onValue, set, push, update, remove, get } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-database.js";
+
+        // ==========================================
+        // CONFIGURAÇÕES
+        // ==========================================
+        const IMGBB_API_KEY = "74921171f0b80d280dad39b367a98904";
+        const firebaseConfig = {
+            apiKey: "AIzaSyARMzC10oACRk-gQtBkwHXk0qW_al-BqTw",
+            authDomain: "gl-hub-labs.firebaseapp.com",
+            databaseURL: "https://gl-hub-labs-default-rtdb.firebaseio.com",
+            projectId: "gl-hub-labs",
+            storageBucket: "gl-hub-labs.firebasestorage.app",
+            messagingSenderId: "478131918341",
+            appId: "1:478131918341:web:c250edb5a535735d24ee6c"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getDatabase(app);
+
+        // ==========================================
+        // ESTADO GLOBAL DA APLICAÇÃO
+        // ==========================================
+        const state = {
+            user: null,
+            isAdmin: false,
+            loadingAuth: true,
+            isDarkMode: localStorage.getItem('theme') === 'dark',
+            activeRoute: 'dashboard',
+            isSidebarOpen: window.innerWidth >= 1024,
+            searchTerm: '',
+            stats: { apps: 0, sites: 0, users: 0, news: 0, categories: 0, recentLogs: [] },
+            data: { apps: [], sites: [], categories: [], news: [], logs: [], settings: {} },
+            modal: { isOpen: false, type: null, data: null } // tipos: 'app', 'site', 'category', 'news'
+        };
+
+        let dbListeners = [];
+
+        const navItems = [
+            { id: 'dashboard', label: 'Dashboard', icon: 'layout-dashboard' },
+            { id: 'apps', label: 'Aplicativos', icon: 'smartphone' },
+            { id: 'sites', label: 'Sites & Portais', icon: 'globe' },
+            { id: 'categories', label: 'Categorias', icon: 'tags' },
+            { id: 'news', label: 'Novidades', icon: 'newspaper' },
+            { id: 'logs', label: 'Histórico de Logs', icon: 'history' },
+            { id: 'settings', label: 'Configurações', icon: 'settings' }
+        ];
+
+        // ==========================================
+        // AUXILIARES E SISTEMA DE NOTIFICAÇÕES
+        // ==========================================
+        const sanitizeEmailForFirebase = (email) => {
+            if (!email) return "";
+            return email.toLowerCase().replace(/\./g, ',');
+        };
+
+        window.showToast = (message, type = 'info') => {
+            const container = document.getElementById('toast-container');
+            if (!container) return;
+
+            const toast = document.createElement('div');
+            toast.className = `p-4 rounded-2xl shadow-xl flex items-center gap-3 text-white pointer-events-auto transform translate-y-5 opacity-0 transition-all duration-300 slide-up`;
+            
+            let bgClass = 'bg-blue-600';
+            let icon = 'info';
+            if (type === 'success') { bgClass = 'bg-emerald-600'; icon = 'check-circle'; }
+            if (type === 'error') { bgClass = 'bg-rose-600'; icon = 'alert-triangle'; }
+
+            toast.classList.add(bgClass);
+            toast.innerHTML = `
+                <i data-lucide="${icon}" class="w-5 h-5 flex-shrink-0"></i>
+                <p class="text-sm font-semibold flex-1">${message}</p>
+                <button class="hover:opacity-80 transition-opacity ml-2"><i data-lucide="x" class="w-4 h-4"></i></button>
+            `;
+
+            container.appendChild(toast);
+            lucide.createIcons();
+
+            setTimeout(() => {
+                toast.classList.remove('translate-y-5', 'opacity-0');
+            }, 10);
+
+            const removeToast = () => {
+                toast.classList.add('opacity-0', 'translate-y-2');
+                setTimeout(() => toast.remove(), 300);
+            };
+
+            toast.querySelector('button').addEventListener('click', removeToast);
+            setTimeout(removeToast, 4000);
+        };
+
+        // ==========================================
+        // SERVIÇOS (UPLOAD IMGBB & ACTIONS)
+        // ==========================================
+        const imgbbService = {
+            upload: async (file) => {
+                const formData = new FormData();
+                formData.append('image', file);
+                try {
+                    const response = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, { method: 'POST', body: formData });
+                    const data = await response.json();
+                    if (data.success) {
+                        showToast("Ficheiro carregado com sucesso para o ImgBB!", "success");
+                        return data.data.url;
+                    }
+                    throw new Error("Resposta negativa do servidor ImgBB");
+                } catch (error) {
+                    console.error("Erro no ImgBB:", error);
+                    showToast("Erro ao processar o upload da imagem.", "error");
+                    return null;
+                }
+            }
+        };
+
+        const rtdbService = {
+            logAction: async (action, details, user) => {
+                const logRef = push(ref(db, 'logs'));
+                await set(logRef, { 
+                    action, 
+                    details, 
+                    user: user?.email || 'Sistema', 
+                    timestamp: Date.now() 
+                });
+            }
+        };
+
+        // ==========================================
+        // INICIALIZAÇÃO & AUTENTICAÇÃO
+        // ==========================================
+        function initApp() {
+            applyTheme();
+            
+            onAuthStateChanged(auth, async (currentUser) => {
+                state.loadingAuth = true;
+                renderApp();
+
+                if (currentUser) {
+                    const userEmail = currentUser.email ? currentUser.email.toLowerCase() : "";
+                    
+                    // 1. Verificação do e-mail mestre absoluto
+                    const isMasterAdmin = (userEmail === 'geilsomcarlos93@gmail.com');
+                    
+                    // 2. Verificação no nó admins/{email_com} do Realtime Database
+                    const sanitizedEmail = sanitizeEmailForFirebase(userEmail);
+                    const adminRef = ref(db, `admins/${sanitizedEmail}`);
+                    const snapshot = await get(adminRef);
+                    const isDbAdmin = snapshot.exists() && snapshot.val() === true;
+
+                    if (isMasterAdmin || isDbAdmin) {
+                        state.isAdmin = true;
+                        state.user = currentUser;
+                        setupDatabaseListeners();
+                        rtdbService.logAction('Autenticação', `Sessão iniciada por ${userEmail}`, currentUser);
+                        showToast(`Acesso concedido. Bem-vindo, ${currentUser.displayName}!`, "success");
+                    } else {
+                        state.isAdmin = false;
+                        state.user = null;
+                        await signOut(auth);
+                        showToast("Acesso Negado: Esta conta não tem privilégios administrativos no ecossistema GL Hub.", "error");
+                    }
+                } else {
+                    state.user = null;
+                    state.isAdmin = false;
+                    clearDatabaseListeners();
+                }
+                
+                state.loadingAuth = false;
+                renderApp();
+            });
+        }
+
+        // ==========================================
+        // SUBSCRIPÇÕES DO FIREBASE (EM TEMPO REAL)
+        // ==========================================
+        function setupDatabaseListeners() {
+            // Monitorizar Aplicações
+            dbListeners.push(onValue(ref(db, 'apps'), s => { 
+                state.stats.apps = s.size; 
+                state.data.apps = s.exists() ? Object.entries(s.val()).map(([id, val]) => ({id, ...val})) : [];
+                if (['dashboard', 'apps'].includes(state.activeRoute)) renderContent();
+            }));
+
+            // Monitorizar Sites
+            dbListeners.push(onValue(ref(db, 'sites'), s => { 
+                state.stats.sites = s.size; 
+                state.data.sites = s.exists() ? Object.entries(s.val()).map(([id, val]) => ({id, ...val})) : [];
+                if (['dashboard', 'sites'].includes(state.activeRoute)) renderContent();
+            }));
+
+            // Monitorizar Categorias
+            dbListeners.push(onValue(ref(db, 'categories'), s => { 
+                state.stats.categories = s.size; 
+                state.data.categories = s.exists() ? Object.entries(s.val()).map(([id, val]) => ({id, ...val})) : [];
+                if (['dashboard', 'categories'].includes(state.activeRoute)) renderContent();
+            }));
+
+            // Monitorizar Novidades
+            dbListeners.push(onValue(ref(db, 'news'), s => { 
+                state.stats.news = s.size; 
+                state.data.news = s.exists() ? Object.entries(s.val()).map(([id, val]) => ({id, ...val})) : [];
+                if (['dashboard', 'news'].includes(state.activeRoute)) renderContent();
+            }));
+
+            // Monitorizar Configurações Globais
+            dbListeners.push(onValue(ref(db, 'settings'), s => { 
+                state.data.settings = s.exists() ? s.val() : {};
+                if (state.activeRoute === 'settings') renderContent();
+            }));
+
+            // Contagem de Utilizadores Totais
+            dbListeners.push(onValue(ref(db, 'users'), s => { 
+                state.stats.users = s.size; 
+                if (state.activeRoute === 'dashboard') renderContent(); 
+            }));
+
+            // Logs Recentes
+            dbListeners.push(onValue(ref(db, 'logs'), s => {
+                if(s.exists()) {
+                    const data = s.val();
+                    const allLogs = Object.entries(data).map(([id, val]) => ({id, ...val})).sort((a,b) => b.timestamp - a.timestamp);
+                    state.data.logs = allLogs;
+                    state.stats.recentLogs = allLogs.slice(0, 5);
+                    if (['dashboard', 'logs'].includes(state.activeRoute)) renderContent();
+                }
+            }));
+        }
+
+        function clearDatabaseListeners() {
+            dbListeners.forEach(unsubscribe => unsubscribe());
+            dbListeners = [];
+        }
+
+        // ==========================================
+        // AÇÕES GLOBAIS (ACESSÍVEIS PELO HTML)
+        // ==========================================
+        window.handleLogin = async () => {
+            try {
+                const provider = new GoogleAuthProvider();
+                await signInWithPopup(auth, provider);
+            } catch (error) { 
+                console.error(error); 
+                showToast("Erro durante a autenticação Google.", "error");
+            }
+        };
+
+        window.handleLogout = async () => {
+            if(state.user) await rtdbService.logAction('Autenticação', 'Sessão terminada pelo utilizador', state.user);
+            await signOut(auth);
+            showToast("Sessão terminada com sucesso.", "info");
+        };
+
+        window.toggleTheme = () => {
+            state.isDarkMode = !state.isDarkMode;
+            localStorage.setItem('theme', state.isDarkMode ? 'dark' : 'light');
+            applyTheme();
+        };
+
+        window.toggleSidebar = () => {
+            state.isSidebarOpen = !state.isSidebarOpen;
+            const sidebar = document.getElementById('sidebar');
+            if (sidebar) {
+                if (state.isSidebarOpen) {
+                    sidebar.classList.remove('-translate-x-full');
+                } else {
+                    sidebar.classList.add('-translate-x-full');
+                }
+            }
+        };
+
+        window.navigate = (routeId) => {
+            state.activeRoute = routeId;
+            state.searchTerm = ''; // Reset à pesquisa
+            if (window.innerWidth < 1024 && state.isSidebarOpen) window.toggleSidebar();
+            renderSidebar();
+            renderContent();
+        };
+
+        window.updateSearch = (val) => {
+            state.searchTerm = val;
+            renderContentOnly();
+        };
+
+        function applyTheme() {
+            if (state.isDarkMode) {
+                document.documentElement.classList.add('dark');
+            } else {
+                document.documentElement.classList.remove('dark');
+            }
+            renderTopbar();
+        }
+
+        // CRUD Modal Triggers
+        window.openModal = (type, id = null) => {
+            state.modal.isOpen = true;
+            state.modal.type = type;
+            state.modal.data = id ? state.data[type === 'category' ? 'categories' : type + 's'].find(item => item.id === id) : null;
+            renderModal();
+        };
+
+        window.closeModal = () => {
+            state.modal.isOpen = false;
+            state.modal.type = null;
+            state.modal.data = null;
+            renderModal();
+        };
+
+        window.deleteItem = async (type, id, name) => {
+            if (confirm(`Tem a certeza que deseja remover "${name}"? Esta ação não pode ser desfeita.`)) {
+                try {
+                    const path = type === 'category' ? 'categories' : type + 's';
+                    await remove(ref(db, `${path}/${id}`));
+                    showToast(`"${name}" removido com sucesso.`, "success");
+                    rtdbService.logAction('Remoção', `Eliminou o recurso "${name}" de ${type}`, state.user);
+                } catch(err) {
+                    showToast("Erro ao tentar remover o registo.", "error");
+                }
+            }
+        };
+
+        // ==========================================
+        // ENVIO DE FORMULÁRIOS (SUBMIT HANDLERS)
+        // ==========================================
+        window.handleAppSubmit = async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const submitBtn = form.querySelector('button[type="submit"]');
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<i data-lucide="loader-2" class="animate-spin w-5 h-5"></i> A Guardar...';
+            lucide.createIcons();
+
+            const formData = {
+                name: form.name.value,
+                category: form.category.value,
+                description: form.description.value,
+                version: form.version.value,
+                versionCode: Number(form.versionCode.value),
+                apkUrl: form.apkUrl.value,
+                iconUrl: form.iconUrl.dataset.url || '',
+                isBeta: form.isBeta.checked,
+                isFeatured: form.isFeatured.checked
+            };
+
+            try {
+                if (state.modal.data?.id) {
+                    await update(ref(db, `apps/${state.modal.data.id}`), { ...formData, updatedAt: Date.now() });
+                    showToast("Aplicação atualizada com sucesso!", "success");
+                    rtdbService.logAction('Atualização', `Editou a aplicação ${formData.name}`, state.user);
+                } else {
+                    const newRef = push(ref(db, 'apps'));
+                    await set(newRef, { ...formData, createdAt: Date.now() });
+                    showToast("Nova aplicação registada!", "success");
+                    rtdbService.logAction('Criação', `Criou a aplicação ${formData.name}`, state.user);
+                }
+                closeModal();
+            } catch (error) {
+                showToast("Erro ao guardar dados da aplicação.", "error");
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '<i data-lucide="check-circle-2" class="w-5 h-5"></i> Guardar';
+                lucide.createIcons();
+            }
+        };
+
+        window.handleSiteSubmit = async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const formData = {
+                name: form.name.value,
+                url: form.url.value,
+                description: form.description.value,
+                isFeatured: form.isFeatured.checked
+            };
+
+            try {
+                if (state.modal.data?.id) {
+                    await update(ref(db, `sites/${state.modal.data.id}`), { ...formData, updatedAt: Date.now() });
+                    showToast("Portal atualizado com sucesso!", "success");
+                    rtdbService.logAction('Atualização', `Editou o portal ${formData.name}`, state.user);
+                } else {
+                    const newRef = push(ref(db, 'sites'));
+                    await set(newRef, { ...formData, createdAt: Date.now() });
+                    showToast("Novo portal registado com sucesso!", "success");
+                    rtdbService.logAction('Criação', `Criou o portal ${formData.name}`, state.user);
+                }
+                closeModal();
+            } catch (error) {
+                showToast("Erro ao guardar dados do site.", "error");
+            }
+        };
+
+        window.handleCategorySubmit = async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const formData = {
+                name: form.name.value,
+                color: form.color.value,
+                order: Number(form.order.value)
+            };
+
+            try {
+                if (state.modal.data?.id) {
+                    await update(ref(db, `categories/${state.modal.data.id}`), { ...formData, updatedAt: Date.now() });
+                    showToast("Categoria atualizada!", "success");
+                    rtdbService.logAction('Atualização', `Editou a categoria ${formData.name}`, state.user);
+                } else {
+                    const newRef = push(ref(db, 'categories'));
+                    await set(newRef, { ...formData, createdAt: Date.now() });
+                    showToast("Categoria criada com sucesso!", "success");
+                    rtdbService.logAction('Criação', `Criou a categoria ${formData.name}`, state.user);
+                }
+                closeModal();
+            } catch (error) {
+                showToast("Erro ao guardar categoria.", "error");
+            }
+        };
+
+        window.handleNewsSubmit = async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const formData = {
+                title: form.title.value,
+                content: form.content.value,
+                imageUrl: form.imageUrl.dataset.url || '',
+                date: Date.now()
+            };
+
+            try {
+                if (state.modal.data?.id) {
+                    await update(ref(db, `news/${state.modal.data.id}`), { ...formData, updatedAt: Date.now() });
+                    showToast("Notícia atualizada!", "success");
+                    rtdbService.logAction('Atualização', `Editou a notícia ${formData.title}`, state.user);
+                } else {
+                    const newRef = push(ref(db, 'news'));
+                    await set(newRef, { ...formData, createdAt: Date.now() });
+                    showToast("Novidade publicada com sucesso!", "success");
+                    rtdbService.logAction('Criação', `Publicou a notícia ${formData.title}`, state.user);
+                }
+                closeModal();
+            } catch (error) {
+                showToast("Erro ao publicar notícia.", "error");
+            }
+        };
+
+        window.handleSettingsSubmit = async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const submitBtn = form.querySelector('button[type="submit"]');
+            submitBtn.disabled = true;
+
+            const configData = {
+                globalMessage: form.globalMessage.value,
+                maintenanceMode: form.maintenanceMode.checked,
+                minAppVersion: form.minAppVersion.value,
+                recommendedVersion: form.recommendedVersion.value
+            };
+
+            try {
+                await set(ref(db, 'settings'), configData);
+                showToast("Configurações globais salvas com sucesso!", "success");
+                rtdbService.logAction('Configuração', "Alterou as configurações gerais do ecossistema", state.user);
+            } catch(e) {
+                showToast("Erro ao salvar configurações.", "error");
+            } finally {
+                submitBtn.disabled = false;
+            }
+        };
+
+        window.handleImageUpload = async (inputEl, previewId, datasetTargetId) => {
+            const file = inputEl.files[0];
+            if (!file) return;
+            
+            const previewImg = document.getElementById(previewId);
+            const dataTarget = document.getElementById(datasetTargetId);
+            const label = inputEl.closest('.upload-zone-wrapper');
+            
+            const originalHTML = label.innerHTML;
+            label.innerHTML = `
+                <div class="flex flex-col items-center justify-center p-6 text-blue-600 dark:text-blue-400">
+                    <i data-lucide="loader-2" class="animate-spin w-8 h-8 mb-2"></i>
+                    <span class="text-sm font-semibold">A processar upload...</span>
+                </div>
+            `;
+            lucide.createIcons();
+
+            const url = await imgbbService.upload(file);
+            if (url) {
+                if(previewImg) { 
+                    previewImg.src = url; 
+                    previewImg.classList.remove('hidden'); 
+                }
+                dataTarget.dataset.url = url;
+            }
+            
+            renderModal();
+        };
+
+        // ==========================================
+        // RENDERERS (CONSTRUTORES DE UI DINÂMICOS)
+        // ==========================================
+        function renderApp() {
+            const root = document.getElementById('app-root');
+            
+            if (state.loadingAuth) {
+                root.innerHTML = `
+                    <div class="w-full h-full flex flex-col items-center justify-center bg-gray-50 dark:bg-[#121212]">
+                        <i data-lucide="loader-2" class="w-12 h-12 animate-spin text-blue-600 mb-2"></i>
+                        <span class="text-sm font-medium text-gray-500">A carregar ambiente seguro...</span>
+                    </div>
+                `;
+                lucide.createIcons();
+                return;
+            }
+
+            if (!state.user || !state.isAdmin) {
+                root.innerHTML = `
+                    <div class="w-full min-h-screen flex items-center justify-center p-4 relative overflow-y-auto bg-gray-50 dark:bg-[#121212] fade-in">
+                        <!-- Vetores de Fundo Decorativos -->
+                        <div class="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-blue-500/10 blur-[120px] rounded-full mix-blend-multiply"></div>
+                        <div class="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-indigo-500/10 blur-[120px] rounded-full mix-blend-multiply"></div>
+                        
+                        <div class="bg-white dark:bg-gray-800 p-10 rounded-[2.5rem] shadow-2xl max-w-md w-full text-center relative z-10 border border-gray-100 dark:border-gray-700/80 slide-up my-auto">
+                            <div class="w-20 h-20 bg-blue-100 dark:bg-blue-900/30 rounded-3xl mx-auto flex items-center justify-center mb-6">
+                                <i data-lucide="smartphone" class="w-10 h-10 text-blue-600 dark:text-blue-400"></i>
+                            </div>
+                            <h1 class="text-3xl font-black text-gray-900 dark:text-white tracking-tight mb-2">GL Hub Admin</h1>
+                            <p class="text-sm text-gray-500 dark:text-gray-400 mb-8 font-medium">Controlo da Geilson Labs Projects</p>
+                            
+                            <button onclick="handleLogin()" class="w-full flex items-center justify-center gap-3 bg-gray-900 dark:bg-white text-white dark:text-gray-900 py-4 px-6 rounded-2xl font-bold text-lg hover:scale-[1.02] transition-all active:scale-95 shadow-xl shadow-gray-900/10 dark:shadow-white/5">
+                                <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" class="w-6 h-6 bg-white rounded-full p-1" alt="Google">
+                                Acesso Administrativo
+                            </button>
+                        </div>
+                    </div>
+                `;
+                lucide.createIcons();
+                return;
+            }
+
+            root.innerHTML = `
+                <div class="w-full h-full flex flex-row flex-1 overflow-hidden">
+                    <aside id="sidebar" class="fixed inset-y-0 left-0 z-40 w-72 bg-white dark:bg-[#1A1A1A] border-r border-gray-100 dark:border-gray-800 transition-transform duration-300 ease-[cubic-bezier(0.2,0,0,1)] lg:translate-x-0 lg:relative lg:flex lg:flex-col h-full ${state.isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}"></aside>
+                    
+                    <main class="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
+                        <header id="topbar" class="h-20 glass border-b border-gray-100 dark:border-gray-800 flex items-center justify-between px-6 z-30 sticky top-0"></header>
+                        <div id="main-content" class="flex-1 overflow-y-auto p-6 md:p-10 custom-scrollbar relative"></div>
+                    </main>
+                </div>
+                
+                <div id="modal-container"></div>
+            `;
+            
+            renderSidebar();
+            renderTopbar();
+            renderContent();
+            renderModal();
+        }
+
+        function renderSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            if (!sidebar) return;
+
+            let navHtml = navItems.map(item => `
+                <button onclick="navigate('${item.id}')" class="w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl transition-all duration-200 ${state.activeRoute === item.id ? 'bg-blue-50 text-blue-600 dark:bg-blue-900/40 dark:text-blue-400 font-bold' : 'text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 font-medium'}">
+                    <i data-lucide="${item.icon}" class="w-5 h-5 ${state.activeRoute === item.id ? 'stroke-[2.5px]' : ''}"></i>
+                    <span class="text-sm">${item.label}</span>
+                </button>
+            `).join('');
+
+            sidebar.innerHTML = `
+                <div class="h-20 flex items-center px-8 border-b border-gray-100 dark:border-gray-800">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 bg-gradient-to-tr from-blue-600 to-indigo-500 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/20">
+                            <i data-lucide="smartphone" class="w-6 h-6 text-white"></i>
+                        </div>
+                        <div>
+                            <h2 class="font-bold text-lg tracking-tight leading-tight">GL Hub</h2>
+                            <p class="text-[10px] uppercase font-bold text-blue-600 dark:text-blue-400 tracking-wider">Painel Administrativo</p>
+                        </div>
+                    </div>
+                    <button class="lg:hidden ml-auto p-2" onclick="toggleSidebar()">
+                        <i data-lucide="x" class="w-5 h-5"></i>
+                    </button>
+                </div>
+                
+                <div class="flex-1 overflow-y-auto py-6 px-4 space-y-1.5 custom-scrollbar">
+                    <p class="px-4 text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 mt-4">Navegação</p>
+                    ${navHtml}
+                </div>
+
+                <div class="p-4 border-t border-gray-100 dark:border-gray-800">
+                    <div class="flex items-center gap-3 px-4 py-3 bg-gray-50 dark:bg-gray-800/50 rounded-2xl">
+                        <img src="${state.user?.photoURL || 'https://via.placeholder.com/40'}" alt="Avatar" class="w-10 h-10 rounded-full border-2 border-white dark:border-gray-700">
+                        <div class="flex-1 overflow-hidden">
+                            <p class="text-sm font-bold truncate">${state.user?.displayName || 'Admin'}</p>
+                            <p class="text-xs text-emerald-500 font-semibold uppercase tracking-wider">SuperAdmin</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+            lucide.createIcons();
+        }
+
+        function renderTopbar() {
+            const topbar = document.getElementById('topbar');
+            if (!topbar) return;
+
+            topbar.innerHTML = `
+                <div class="flex items-center gap-4">
+                    <button class="lg:hidden p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800" onclick="toggleSidebar()">
+                        <i data-lucide="menu" class="w-6 h-6"></i>
+                    </button>
+                    
+                    <div class="hidden md:flex items-center bg-gray-100 dark:bg-gray-900 rounded-full px-4 py-2.5 w-96 border border-transparent focus-within:border-blue-500 focus-within:bg-white dark:focus-within:bg-gray-800 transition-all">
+                        <i data-lucide="search" class="w-5 h-5 text-gray-400 mr-2"></i>
+                        <input type="text" oninput="updateSearch(this.value)" value="${state.searchTerm}" placeholder="Filtrar nesta secção..." class="bg-transparent border-none outline-none text-sm w-full dark:text-white">
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-3">
+                    <button onclick="toggleTheme()" class="p-2.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-600 dark:text-gray-300 transition-colors">
+                        <i data-lucide="${state.isDarkMode ? 'sun' : 'moon'}" class="w-5 h-5"></i>
+                    </button>
+                    <button onclick="handleLogout()" class="hidden sm:flex items-center gap-2 px-4 py-2.5 rounded-full text-sm font-medium text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">
+                        <i data-lucide="log-out" class="w-4 h-4"></i> Terminar Sessão
+                    </button>
+                </div>
+            `;
+            lucide.createIcons();
+        }
+
+        function renderContentOnly() {
+            renderContent();
+        }
+
+        function renderContent() {
+            const content = document.getElementById('main-content');
+            if (!content) return;
+
+            let html = '';
+
+            // 1. DASHBOARD
+            if (state.activeRoute === 'dashboard') {
+                html = `
+                    <div class="space-y-6 slide-up">
+                        <div class="flex items-center justify-between">
+                            <h1 class="text-3xl font-black text-gray-900 dark:text-white">Consola de Visão Geral</h1>
+                            <span class="text-xs px-3 py-1.5 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 rounded-full font-bold">Produção ativa</span>
+                        </div>
+                        
+                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                            ${[
+                                { title: "Aplicações", value: state.stats.apps, icon: "smartphone", color: "text-blue-500", bg: "bg-blue-100 dark:bg-blue-900/30" },
+                                { title: "Sites & Portais", value: state.stats.sites, icon: "globe", color: "text-purple-500", bg: "bg-purple-100 dark:bg-purple-900/30" },
+                                { title: "Categorias", value: state.stats.categories, icon: "tags", color: "text-amber-500", bg: "bg-amber-100 dark:bg-amber-900/30" },
+                                { title: "Novidades", value: state.stats.news, icon: "newspaper", color: "text-emerald-500", bg: "bg-emerald-100 dark:bg-emerald-900/30" }
+                            ].map(item => `
+                                <div class="bg-white dark:bg-gray-800 rounded-3xl p-6 shadow-sm border border-gray-100 dark:border-gray-700 flex items-center gap-4 hover:shadow-md transition-all">
+                                    <div class="p-4 rounded-2xl ${item.bg} ${item.color}"><i data-lucide="${item.icon}" class="w-8 h-8"></i></div>
+                                    <div>
+                                        <p class="text-sm font-semibold text-gray-500 dark:text-gray-400">${item.title}</p>
+                                        <h3 class="text-3xl font-extrabold text-gray-900 dark:text-white">${item.value}</h3>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+
+                        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                            <div class="bg-white dark:bg-gray-800 rounded-3xl p-6 shadow-sm border border-gray-100 dark:border-gray-700 lg:col-span-2">
+                                <h3 class="text-lg font-bold mb-4 text-gray-900 dark:text-white flex items-center gap-2">
+                                    <i data-lucide="history" class="w-5 h-5 text-blue-500"></i> Histórico de Atividade Recente
+                                </h3>
+                                <div class="space-y-3">
+                                    ${state.stats.recentLogs.length > 0 ? state.stats.recentLogs.map(log => `
+                                        <div class="flex items-start gap-3 p-3 rounded-2xl bg-gray-50 dark:bg-gray-900/50 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
+                                            <div class="p-2 bg-white dark:bg-gray-800 rounded-xl text-gray-500 shadow-sm"><i data-lucide="activity" class="w-4 h-4"></i></div>
+                                            <div class="flex-1 min-w-0">
+                                                <p class="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">${log.action} • <span class="text-gray-500 font-normal">${log.details}</span></p>
+                                                <p class="text-[11px] text-gray-400">${log.user} • ${new Date(log.timestamp).toLocaleString('pt-PT')}</p>
+                                            </div>
+                                        </div>
+                                    `).join('') : '<p class="text-gray-500 text-sm py-6 text-center">Nenhuma atividade registada no sistema.</p>'}
+                                </div>
+                            </div>
+                            
+                            <div class="bg-gradient-to-br from-blue-600 to-indigo-700 text-white rounded-3xl p-6 shadow-xl flex flex-col justify-between">
+                                <div>
+                                    <i data-lucide="shield-check" class="w-12 h-12 mb-4 text-blue-100"></i>
+                                    <h3 class="text-2xl font-black mb-2 leading-tight">Monitor de Ecossistema</h3>
+                                    <p class="text-sm text-blue-100/90 leading-relaxed">Conectado ao Firebase Realtime Database. As atualizações nos dispositivos dos utilizadores são em tempo real.</p>
+                                </div>
+                                <div class="mt-8 p-4 bg-white/10 rounded-2xl backdrop-blur-md border border-white/10">
+                                    <p class="text-xs uppercase font-bold opacity-85">Versão Estável Atual</p>
+                                    <p class="text-2xl font-black mt-1">v2.5.0</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } 
+            // 2. APLICATIVOS
+            else if (state.activeRoute === 'apps') {
+                const filteredApps = state.data.apps.filter(app => app.name.toLowerCase().includes(state.searchTerm.toLowerCase()));
+
+                html = `
+                    <div class="space-y-6 slide-up">
+                        <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+                            <div>
+                                <h1 class="text-3xl font-black text-gray-900 dark:text-white font-sans">Gerir Aplicativos</h1>
+                                <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">Configure binários, links e detalhes das suas apps móveis.</p>
+                            </div>
+                            <button onclick="openModal('app')" class="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-full font-semibold shadow-lg shadow-blue-500/15 transition-all hover:scale-[1.02] active:scale-95">
+                                <i data-lucide="plus" class="w-5 h-5"></i> Novo Aplicativo
+                            </button>
+                        </div>
+
+                        <div class="bg-white dark:bg-gray-800 rounded-3xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-left border-collapse">
+                                    <thead>
+                                        <tr class="bg-gray-50 dark:bg-gray-800/40 text-sm text-gray-500 dark:text-gray-400 border-b border-gray-100 dark:border-gray-700">
+                                            <th class="px-6 py-4 font-semibold">Ícone</th>
+                                            <th class="px-6 py-4 font-semibold">Nome</th>
+                                            <th class="px-6 py-4 font-semibold">Categoria</th>
+                                            <th class="px-6 py-4 font-semibold">Versão</th>
+                                            <th class="px-6 py-4 font-semibold">Status</th>
+                                            <th class="px-6 py-4 font-semibold text-right">Ações</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+                                        ${filteredApps.length > 0 ? filteredApps.map(app => `
+                                            <tr class="hover:bg-gray-50/50 dark:hover:bg-gray-700/30 transition-colors group">
+                                                <td class="px-6 py-4">
+                                                    <img src="${app.iconUrl || 'https://via.placeholder.com/40'}" class="w-12 h-12 rounded-2xl object-cover border border-gray-100 dark:border-gray-600 shadow-sm" alt="App Icon">
+                                                </td>
+                                                <td class="px-6 py-4 font-bold text-gray-900 dark:text-white text-base">${app.name}</td>
+                                                <td class="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 font-medium">${app.category}</td>
+                                                <td class="px-6 py-4"><span class="px-2.5 py-1 bg-gray-100 dark:bg-gray-900 rounded-lg text-xs font-mono font-bold dark:text-gray-300">${app.version} (${app.versionCode})</span></td>
+                                                <td class="px-6 py-4">
+                                                    <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-extrabold ${app.isBeta ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/20 dark:text-amber-400' : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-400'}">
+                                                        <span class="w-1.5 h-1.5 rounded-full ${app.isBeta ? 'bg-amber-500' : 'bg-emerald-500'}"></span>
+                                                        ${app.isBeta ? 'BETA' : 'PRODUÇÃO'}
+                                                    </span>
+                                                </td>
+                                                <td class="px-6 py-4 text-right">
+                                                    <div class="flex justify-end gap-1.5 opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity">
+                                                        <button onclick="openModal('app', '${app.id}')" class="p-2 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition-colors"><i data-lucide="edit-2" class="w-4.5 h-4.5"></i></button>
+                                                        <button onclick="deleteItem('app', '${app.id}', '${app.name}')" class="p-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/20 rounded-full transition-colors"><i data-lucide="trash-2" class="w-4.5 h-4.5"></i></button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        `).join('') : `<tr><td colspan="6" class="px-6 py-16 text-center text-gray-500">Nenhum aplicativo registado ou encontrado.</td></tr>`}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+            // 3. SITES E PORTAIS
+            else if (state.activeRoute === 'sites') {
+                const filteredSites = state.data.sites.filter(site => site.name.toLowerCase().includes(state.searchTerm.toLowerCase()));
+
+                html = `
+                    <div class="space-y-6 slide-up">
+                        <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+                            <div>
+                                <h1 class="text-3xl font-black text-gray-900 dark:text-white">Gerir Sites & Portais</h1>
+                                <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">Controle de portais Web associados ao ecossistema GL Projects.</p>
+                            </div>
+                            <button onclick="openModal('site')" class="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-full font-semibold shadow-lg transition-all hover:scale-[1.02] active:scale-95">
+                                <i data-lucide="plus" class="w-5 h-5"></i> Adicionar Site
+                            </button>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                            ${filteredSites.length > 0 ? filteredSites.map(site => `
+                                <div class="bg-white dark:bg-gray-800 rounded-3xl border border-gray-100 dark:border-gray-700 p-6 flex flex-col justify-between hover:shadow-lg transition-all group">
+                                    <div>
+                                        <div class="flex items-center justify-between mb-4">
+                                            <div class="p-3 bg-blue-50 dark:bg-blue-950/30 text-blue-600 rounded-2xl"><i data-lucide="globe" class="w-6 h-6"></i></div>
+                                            <div class="flex items-center gap-1">
+                                                <button onclick="openModal('site', '${site.id}')" class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full text-gray-500"><i data-lucide="edit-2" class="w-4 h-4"></i></button>
+                                                <button onclick="deleteItem('site', '${site.id}', '${site.name}')" class="p-2 hover:bg-rose-50 dark:hover:bg-rose-900/20 text-rose-500 rounded-full"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                                            </div>
+                                        </div>
+                                        <h3 class="text-lg font-bold text-gray-900 dark:text-white">${site.name}</h3>
+                                        <p class="text-sm text-gray-500 dark:text-gray-400 mt-1 line-clamp-3">${site.description || 'Sem descrição inserida.'}</p>
+                                    </div>
+                                    <div class="mt-6 pt-4 border-t border-gray-50 dark:border-gray-700 flex items-center justify-between">
+                                        <a href="${site.url}" target="_blank" class="text-sm font-semibold text-blue-600 hover:underline flex items-center gap-1.5">
+                                            Aceder Web-App <i data-lucide="external-link" class="w-4 h-4"></i>
+                                        </a>
+                                        ${site.isFeatured ? '<span class="text-[10px] px-2.5 py-1 bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400 font-extrabold rounded-full">Destaque</span>' : ''}
+                                    </div>
+                                </div>
+                            `).join('') : '<div class="col-span-full py-16 bg-white dark:bg-gray-800 rounded-3xl border text-center text-gray-500">Nenhum portal Web registado.</div>'}
+                        </div>
+                    </div>
+                `;
+            }
+            // 4. CATEGORIAS
+            else if (state.activeRoute === 'categories') {
+                const filteredCats = state.data.categories.filter(cat => cat.name.toLowerCase().includes(state.searchTerm.toLowerCase()));
+
+                html = `
+                    <div class="space-y-6 slide-up">
+                        <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+                            <div>
+                                <h1 class="text-3xl font-black text-gray-900 dark:text-white">Gerir Categorias</h1>
+                                <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">Organize as suas apps e sites em divisões estruturadas.</p>
+                            </div>
+                            <button onclick="openModal('category')" class="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-full font-semibold shadow-lg transition-all hover:scale-[1.02] active:scale-95">
+                                <i data-lucide="plus" class="w-5 h-5"></i> Nova Categoria
+                            </button>
+                        </div>
+
+                        <div class="bg-white dark:bg-gray-800 rounded-3xl border border-gray-100 dark:border-gray-700 overflow-hidden">
+                            <table class="w-full text-left">
+                                <thead>
+                                    <tr class="bg-gray-50 dark:bg-gray-800/40 text-sm text-gray-500 dark:text-gray-400 border-b">
+                                        <th class="px-6 py-4 font-semibold">Ordem</th>
+                                        <th class="px-6 py-4 font-semibold">Nome da Categoria</th>
+                                        <th class="px-6 py-4 font-semibold">Cor Visual</th>
+                                        <th class="px-6 py-4 font-semibold text-right">Ações</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+                                    ${filteredCats.length > 0 ? filteredCats.map(cat => `
+                                        <tr class="hover:bg-gray-50/50 dark:hover:bg-gray-700/30 transition-colors group">
+                                            <td class="px-6 py-4 font-mono font-bold text-sm text-gray-400">#${cat.order || 0}</td>
+                                            <td class="px-6 py-4 font-bold text-gray-900 dark:text-white">${cat.name}</td>
+                                            <td class="px-6 py-4">
+                                                <div class="flex items-center gap-2">
+                                                    <span class="w-4 h-4 rounded-full border border-gray-200" style="background-color: ${cat.color || '#3b82f6'}"></span>
+                                                    <span class="text-xs font-mono font-medium">${cat.color || '#3b82f6'}</span>
+                                                </div>
+                                            </td>
+                                            <td class="px-6 py-4 text-right">
+                                                <div class="flex justify-end gap-1.5 opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    <button onclick="openModal('category', '${cat.id}')" class="p-2 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full"><i data-lucide="edit-2" class="w-4 h-4"></i></button>
+                                                    <button onclick="deleteItem('category', '${cat.id}', '${cat.name}')" class="p-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/20 rounded-full"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    `).join('') : '<tr><td colspan="4" class="px-6 py-16 text-center text-gray-500">Nenhuma categoria registada.</td></tr>'}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                `;
+            }
+            // 5. NOVIDADES
+            else if (state.activeRoute === 'news') {
+                const filteredNews = state.data.news.filter(news => news.title.toLowerCase().includes(state.searchTerm.toLowerCase()));
+
+                html = `
+                    <div class="space-y-6 slide-up">
+                        <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+                            <div>
+                                <h1 class="text-3xl font-black text-gray-900 dark:text-white">Gerir Novidades</h1>
+                                <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">Gerencie artigos de changelog e notícias exibidos na app GL Hub.</p>
+                            </div>
+                            <button onclick="openModal('news')" class="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-full font-semibold shadow-lg transition-all hover:scale-[1.02] active:scale-95">
+                                <i data-lucide="plus" class="w-5 h-5"></i> Nova Publicação
+                            </button>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            ${filteredNews.length > 0 ? filteredNews.map(news => `
+                                <div class="bg-white dark:bg-gray-800 rounded-3xl border border-gray-100 dark:border-gray-700 overflow-hidden hover:shadow-lg transition-all group flex flex-col justify-between">
+                                    <div>
+                                        ${news.imageUrl ? `
+                                            <div class="h-48 w-full overflow-hidden relative bg-gray-100">
+                                                <img src="${news.imageUrl}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" alt="News Image">
+                                            </div>
+                                        ` : ''}
+                                        <div class="p-6">
+                                            <div class="flex items-center justify-between mb-3">
+                                                <span class="text-xs text-gray-400 font-medium">${new Date(news.date).toLocaleDateString('pt-PT')}</span>
+                                                <div class="flex items-center gap-1">
+                                                    <button onclick="openModal('news', '${news.id}')" class="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full text-gray-500"><i data-lucide="edit-2" class="w-4 h-4"></i></button>
+                                                    <button onclick="deleteItem('news', '${news.id}', '${news.title}')" class="p-1.5 hover:bg-rose-50 dark:hover:bg-rose-900/20 text-rose-500 rounded-full"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                                                </div>
+                                            </div>
+                                            <h3 class="text-lg font-bold text-gray-900 dark:text-white line-clamp-2">${news.title}</h3>
+                                            <p class="text-sm text-gray-500 dark:text-gray-400 mt-2 line-clamp-4">${news.content || ''}</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            `).join('') : '<div class="col-span-full py-16 bg-white dark:bg-gray-800 rounded-3xl border text-center text-gray-500">Nenhum artigo de novidade registado.</div>'}
+                        </div>
+                    </div>
+                `;
+            }
+            // 6. HISTÓRICO DE LOGS
+            else if (state.activeRoute === 'logs') {
+                const filteredLogs = state.data.logs.filter(log => 
+                    log.action.toLowerCase().includes(state.searchTerm.toLowerCase()) || 
+                    log.details.toLowerCase().includes(state.searchTerm.toLowerCase())
+                );
+
+                html = `
+                    <div class="space-y-6 slide-up">
+                        <div>
+                            <h1 class="text-3xl font-black text-gray-900 dark:text-white">Auditoria & Logs</h1>
+                            <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">Lista completa de operações efetuadas pelos administradores.</p>
+                        </div>
+
+                        <div class="bg-white dark:bg-gray-800 rounded-3xl border border-gray-100 dark:border-gray-700 overflow-hidden">
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-left">
+                                    <thead>
+                                        <tr class="bg-gray-50 dark:bg-gray-800/40 text-sm text-gray-500 dark:text-gray-400 border-b">
+                                            <th class="px-6 py-4 font-semibold">Data/Hora</th>
+                                            <th class="px-6 py-4 font-semibold">Ação</th>
+                                            <th class="px-6 py-4 font-semibold">Detalhes</th>
+                                            <th class="px-6 py-4 font-semibold">Administrador</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+                                        ${filteredLogs.length > 0 ? filteredLogs.map(log => `
+                                            <tr class="hover:bg-gray-50/40 dark:hover:bg-gray-700/20 text-sm">
+                                                <td class="px-6 py-4 font-mono text-xs text-gray-400">${new Date(log.timestamp).toLocaleString('pt-PT')}</td>
+                                                <td class="px-6 py-4 font-bold text-blue-600 dark:text-blue-400">${log.action}</td>
+                                                <td class="px-6 py-4 text-gray-600 dark:text-gray-300 font-medium">${log.details}</td>
+                                                <td class="px-6 py-4 font-semibold text-gray-500 dark:text-gray-400">${log.user}</td>
+                                            </tr>
+                                        `).join('') : '<tr><td colspan="4" class="px-6 py-16 text-center text-gray-500">Nenhum log de auditoria encontrado.</td></tr>'}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+            // 7. CONFIGURAÇÕES GLOBAIS
+            else if (state.activeRoute === 'settings') {
+                const settings = state.data.settings;
+                html = `
+                    <div class="space-y-6 slide-up">
+                        <div>
+                            <h1 class="text-3xl font-black text-gray-900 dark:text-white">Definições Globais</h1>
+                            <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">Controle o ecossistema remoto do aplicativo de forma global.</p>
+                        </div>
+
+                        <form onsubmit="handleSettingsSubmit(event)" class="bg-white dark:bg-gray-800 rounded-3xl border border-gray-100 dark:border-gray-700 p-6 md:p-8 space-y-6 max-w-3xl">
+                            <div class="flex flex-col gap-1.5">
+                                <label class="text-sm font-semibold text-gray-700 dark:text-gray-300 ml-1">Mensagem de Aviso Remota (Global)</label>
+                                <textarea name="globalMessage" rows="3" class="px-4 py-3 rounded-2xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 focus:bg-white dark:focus:bg-gray-800 focus:border-blue-500 outline-none w-full">${settings.globalMessage || ''}</textarea>
+                                <p class="text-[11px] text-gray-400 ml-1">Mensagem que será exibida a todos os utilizadores ao abrir a app GL Hub.</p>
+                            </div>
+
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+                                <div class="flex flex-col gap-1.5">
+                                    <label class="text-sm font-semibold text-gray-700 dark:text-gray-300 ml-1">Versão Mínima do App (Forçar Update)</label>
+                                    <input type="text" name="minAppVersion" value="${settings.minAppVersion || ''}" placeholder="Ex: 2.1.0" class="px-4 py-3 rounded-2xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 focus:bg-white dark:focus:bg-gray-800 focus:border-blue-500 outline-none w-full">
+                                </div>
+                                <div class="flex flex-col gap-1.5">
+                                    <label class="text-sm font-semibold text-gray-700 dark:text-gray-300 ml-1">Versão Recomendada</label>
+                                    <input type="text" name="recommendedVersion" value="${settings.recommendedVersion || ''}" placeholder="Ex: 2.5.0" class="px-4 py-3 rounded-2xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 focus:bg-white dark:focus:bg-gray-800 focus:border-blue-500 outline-none w-full">
+                                </div>
+                            </div>
+
+                            <div class="pt-2">
+                                <label class="flex items-center gap-3 cursor-pointer p-4 rounded-2xl bg-gray-50 dark:bg-gray-900/60 border border-transparent hover:border-amber-500/20 transition-all">
+                                    <input type="checkbox" name="maintenanceMode" ${settings.maintenanceMode ? 'checked' : ''} class="w-6 h-6 rounded text-amber-500 focus:ring-amber-500/20 border-gray-300">
+                                    <div>
+                                        <p class="text-sm font-bold text-gray-900 dark:text-white">Modo de Manutenção Remoto</p>
+                                        <p class="text-[11px] text-gray-400">Suspende as comunicações do aplicativo mostrando um ecrã de bloqueio.</p>
+                                    </div>
+                                </label>
+                            </div>
+
+                            <div class="pt-6 border-t border-gray-100 dark:border-gray-700 flex justify-end">
+                                <button type="submit" class="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-full font-semibold shadow-lg shadow-blue-500/10 transition-all hover:scale-[1.01] active:scale-95">
+                                    <i data-lucide="check-circle-2" class="w-5 h-5"></i> Salvar Configuração
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                `;
+            }
+
+            content.innerHTML = html;
+            lucide.createIcons();
+        }
+
+        // ==========================================
+        // CONSTRUTOR DE DIÁLOGOS (MODAL DINÂMICO)
+        // ==========================================
+        function renderModal() {
+            const container = document.getElementById('modal-container');
+            if (!container) return;
+
+            if (!state.modal.isOpen) {
+                container.innerHTML = '';
+                return;
+            }
+
+            const isEdit = !!state.modal.data;
+            const data = state.modal.data || {};
+            
+            let title = '';
+            let formHtml = '';
+
+            // MODAL PARA APLICAÇÕES
+            if (state.modal.type === 'app') {
+                title = `${isEdit ? 'Editar' : 'Registar'} Aplicação`;
+                formHtml = `
+                    <form onsubmit="handleAppSubmit(event)" class="space-y-5">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+                            <div class="flex flex-col gap-1.5">
+                                <label class="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider ml-1">Nome da Aplicação</label>
+                                <input type="text" name="name" value="${data.name || ''}" required class="px-4 py-3 rounded-2xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 focus:bg-white dark:focus:bg-gray-800 focus:border-blue-500 outline-none w-full">
+                            </div>
+                            <div class="flex flex-col gap-1.5">
+                                <label class="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider ml-1">Categoria de Destino</label>
+                                <select name="category" class="px-4 py-3 rounded-2xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 focus:bg-white dark:focus:bg-gray-800 focus:border-blue-500 outline-none w-full">
+                                    ${state.data.categories.map(c => `<option value="${c.name}" ${data.category === c.name ? 'selected' : ''}>${c.name}</option>`).join('') || '<option value="Outros">Outros</option>'}
+                                </select>
+                            </div>
+                        </div>
+                        <div class="flex flex-col gap-1.5">
+                            <label class="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider ml-1">Descrição Informativa</label>
+                            <input type="text" name="description" value="${data.description || ''}" class="px-4 py-3 rounded-2xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 focus:bg-white dark:focus:bg-gray-800 focus:border-blue-500 outline-none w-full">
+                        </div>
+                        
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+                            <div class="flex flex-col gap-1.5">
+                                <label class="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider ml-1">Versão Semântica</label>
+                                <input type="text" name="version" value="${data.version || ''}" required placeholder="Ex: 1.0.0" class="px-4 py-3 rounded-2xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 focus:bg-white dark:focus:bg-gray-800 focus:border-blue-500 outline-none w-full">
+                            </div>
+                            <div class="flex flex-col gap-1.5">
+                                <label class="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider ml-1">Código de Compilação</label>
+                                <input type="number" name="versionCode" value="${data.versionCode || ''}" required placeholder="Ex: 4" class="px-4 py-3 rounded-2xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 focus:bg-white dark:focus:bg-gray-800 focus:border-blue-500 outline-none w-full">
+                            </div>
+                            <div class="flex flex-col gap-1.5">
+                                <label class="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider ml-1">Endereço Web do APK</label>
+                                <input type="url" name="apkUrl" value="${data.apkUrl || ''}" class="px-4 py-3 rounded-2xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 focus:bg-white dark:focus:bg-gray-800 focus:border-blue-500 outline-none w-full">
+                            </div>
+                        </div>
+
+                        <!-- Zona de Envio de Imagens (Upload Zone) -->
+                        <div class="flex flex-col gap-2">
+                            <label class="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider ml-1">Ícone Oficial (.PNG, .JPG)</label>
+                            <div class="flex items-center gap-4">
+                                <div class="relative w-16 h-16 border rounded-2xl overflow-hidden bg-gray-100 flex-shrink-0">
+                                    <img id="icon-preview" src="${data.iconUrl || 'https://via.placeholder.com/64'}" class="w-full h-full object-cover ${data.iconUrl ? '' : 'hidden'}" />
+                                </div>
+                                <input type="hidden" id="icon-url-data" data-url="${data.iconUrl || ''}">
+                                <div class="upload-zone-wrapper flex-1">
+                                    <label class="flex items-center gap-2 px-4 py-3 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-2xl cursor-pointer transition-colors w-max text-sm font-semibold">
+                                        <i data-lucide="upload-cloud" class="w-5 h-5"></i>
+                                        <span>Carregar Imagem</span>
+                                        <input type="file" accept="image/*" class="hidden" onchange="handleImageUpload(this, 'icon-preview', 'icon-url-data')">
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="flex gap-6 pt-2">
+                            <label class="flex items-center gap-2 cursor-pointer text-sm font-bold text-gray-700 dark:text-gray-300">
+                                <input type="checkbox" name="isBeta" ${data.isBeta ? 'checked' : ''} class="w-5 h-5 rounded text-blue-600 focus:ring-0"> Estágio Beta
+                            </label>
+                            <label class="flex items-center gap-2 cursor-pointer text-sm font-bold text-gray-700 dark:text-gray-300">
+                                <input type="checkbox" name="isFeatured" ${data.isFeatured ? 'checked' : ''} class="w-5 h-5 rounded text-blue-600 focus:ring-0"> Destacar na Entrada
+                            </label>
+                        </div>
+
+                        <div class="pt-6 flex justify-end border-t border-gray-100 dark:border-gray-700 gap-3">
+                            <button type="button" onclick="closeModal()" class="px-5 py-3 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 font-semibold text-sm">Cancelar</button>
+                            <button type="submit" class="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-full font-semibold shadow-md transition-all active:scale-95">
+                                <i data-lucide="check-circle-2" class="w-5 h-5"></i> Guardar Aplicação
+                            </button>
+                        </div>
+                    </form>
+                `;
+            } 
+            // MODAL PARA SITES
+            else if (state.modal.type === 'site') {
+                title = `${isEdit ? 'Editar' : 'Registar'} Portal Web`;
+                formHtml = `
+                    <form onsubmit="handleSiteSubmit(event)" class="space-y-5">
+                        <div class="flex flex-col gap-1.5">
+                            <label class="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider ml-1">Nome do Portal</label>
+                            <input type="text" name="name" value="${data.name || ''}" required class="px-4 py-3 rounded-2xl border bg-gray-50 dark:bg-gray-900 dark:border-gray-700 focus:bg-white outline-none w-full">
+                        </div>
+                        <div class="flex flex-col gap-1.5">
+                            <label class="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider ml-1">Endereço de Acesso (URL)</label>
+                            <input type="url" name="url" value="${data.url || ''}" required placeholder="https://..." class="px-4 py-3 rounded-2xl border bg-gray-50 dark:bg-gray-900 dark:border-gray-700 focus:bg-white outline-none w-full">
+                        </div>
+                        <div class="flex flex-col gap-1.5">
+                            <label class="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider ml-1">Breve Descrição</label>
+                            <input type="text" name="description" value="${data.description || ''}" class="px-4 py-3 rounded-2xl border bg-gray-50 dark:bg-gray-900 dark:border-gray-700 focus:bg-white outline-none w-full">
+                        </div>
+                        <div class="pt-2">
+                            <label class="flex items-center gap-2 cursor-pointer text-sm font-bold">
+                                <input type="checkbox" name="isFeatured" ${data.isFeatured ? 'checked' : ''} class="w-5 h-5 rounded text-blue-600 focus:ring-0"> Destacar na App
+                            </label>
+                        </div>
+                        <div class="pt-6 flex justify-end border-t border-gray-100 dark:border-gray-700 gap-3">
+                            <button type="button" onclick="closeModal()" class="px-5 py-3 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 font-semibold text-sm">Cancelar</button>
+                            <button type="submit" class="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-full font-semibold shadow-md transition-all active:scale-95">Salvar Site</button>
+                        </div>
+                    </form>
+                `;
+            }
+            // MODAL PARA CATEGORIAS
+            else if (state.modal.type === 'category') {
+                title = `${isEdit ? 'Editar' : 'Registar'} Categoria`;
+                formHtml = `
+                    <form onsubmit="handleCategorySubmit(event)" class="space-y-5">
+                        <div class="flex flex-col gap-1.5">
+                            <label class="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider ml-1">Nome da Categoria</label>
+                            <input type="text" name="name" value="${data.name || ''}" required class="px-4 py-3 rounded-2xl border bg-gray-50 dark:bg-gray-900 dark:border-gray-700 focus:bg-white outline-none w-full">
+                        </div>
+                        <div class="grid grid-cols-2 gap-5">
+                            <div class="flex flex-col gap-1.5">
+                                <label class="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider ml-1">Cor Representativa</label>
+                                <input type="color" name="color" value="${data.color || '#3b82f6'}" class="h-12 w-full rounded-2xl border cursor-pointer">
+                            </div>
+                            <div class="flex flex-col gap-1.5">
+                                <label class="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider ml-1">Ordem de Exibição</label>
+                                <input type="number" name="order" value="${data.order || 0}" required class="px-4 py-3 rounded-2xl border bg-gray-50 dark:bg-gray-900 dark:border-gray-700 focus:bg-white outline-none w-full">
+                            </div>
+                        </div>
+                        <div class="pt-6 flex justify-end border-t border-gray-100 dark:border-gray-700 gap-3">
+                            <button type="button" onclick="closeModal()" class="px-5 py-3 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 font-semibold text-sm">Cancelar</button>
+                            <button type="submit" class="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-full font-semibold shadow-md transition-all active:scale-95">Salvar Categoria</button>
+                        </div>
+                    </form>
+                `;
+            }
+            // MODAL PARA NOVIDADES
+            else if (state.modal.type === 'news') {
+                title = `${isEdit ? 'Editar' : 'Registar'} Publicação`;
+                formHtml = `
+                    <form onsubmit="handleNewsSubmit(event)" class="space-y-5">
+                        <div class="flex flex-col gap-1.5">
+                            <label class="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider ml-1">Título do Artigo</label>
+                            <input type="text" name="title" value="${data.title || ''}" required class="px-4 py-3 rounded-2xl border bg-gray-50 dark:bg-gray-900 dark:border-gray-700 focus:bg-white outline-none w-full">
+                        </div>
+                        <div class="flex flex-col gap-1.5">
+                            <label class="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider ml-1">Texto de Conteúdo</label>
+                            <textarea name="content" rows="4" required class="px-4 py-3 rounded-2xl border bg-gray-50 dark:bg-gray-900 dark:border-gray-700 focus:bg-white outline-none w-full">${data.content || ''}</textarea>
+                        </div>
+                        <div class="flex flex-col gap-2">
+                            <label class="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider ml-1">Banner do Artigo (.PNG, .JPG)</label>
+                            <div class="flex items-center gap-4">
+                                <div class="relative w-24 h-16 border rounded-2xl overflow-hidden bg-gray-100 flex-shrink-0">
+                                    <img id="news-preview" src="${data.imageUrl || 'https://via.placeholder.com/120x80'}" class="w-full h-full object-cover ${data.imageUrl ? '' : 'hidden'}" />
+                                </div>
+                                <input type="hidden" id="news-url-data" data-url="${data.imageUrl || ''}">
+                                <div class="upload-zone-wrapper flex-1">
+                                    <label class="flex items-center gap-2 px-4 py-3 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-2xl cursor-pointer transition-colors w-max text-sm font-semibold">
+                                        <i data-lucide="upload-cloud" class="w-5 h-5"></i>
+                                        <span>Carregar Banner</span>
+                                        <input type="file" accept="image/*" class="hidden" onchange="handleImageUpload(this, 'news-preview', 'news-url-data')">
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="pt-6 flex justify-end border-t border-gray-100 dark:border-gray-700 gap-3">
+                            <button type="button" onclick="closeModal()" class="px-5 py-3 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 font-semibold text-sm">Cancelar</button>
+                            <button type="submit" class="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-full font-semibold shadow-lg transition-all active:scale-95">Publicar Artigo</button>
+                        </div>
+                    </form>
+                `;
+            }
+
+            container.innerHTML = `
+                <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm fade-in">
+                    <div class="bg-white dark:bg-gray-800 rounded-3xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col slide-up" onclick="event.stopPropagation()">
+                        <div class="flex items-center justify-between p-6 border-b border-gray-100 dark:border-gray-700">
+                            <h2 class="text-xl font-bold text-gray-900 dark:text-white">${title}</h2>
+                            <button onclick="closeModal()" class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition-colors text-gray-500">
+                                <i data-lucide="x" class="w-5 h-5"></i>
+                            </button>
+                        </div>
+                        <div class="p-6 overflow-y-auto custom-scrollbar text-gray-900 dark:text-gray-100">
+                            ${formHtml}
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            container.querySelector('.fade-in').addEventListener('click', closeModal);
+            lucide.createIcons();
+        }
+
+        // Arranque Inicial do Painel
+        window.addEventListener('DOMContentLoaded', initApp);
+
+    </script>
+</body>
+</html>
