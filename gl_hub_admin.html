@@ -187,13 +187,17 @@
 
         const rtdbService = {
             logAction: async (action, details, user) => {
-                const logRef = push(ref(db, 'logs'));
-                await set(logRef, { 
-                    action, 
-                    details, 
-                    user: user?.email || 'Sistema', 
-                    timestamp: Date.now() 
-                });
+                try {
+                    const logRef = push(ref(db, 'logs'));
+                    await set(logRef, { 
+                        action, 
+                        details, 
+                        user: user?.email || 'Sistema', 
+                        timestamp: Date.now() 
+                    });
+                } catch (error) {
+                    console.error("Não foi possível registar o log de atividade:", error);
+                }
             }
         };
 
@@ -209,12 +213,19 @@
 
                 if (currentUser) {
                     const userEmail = currentUser.email ? currentUser.email.toLowerCase() : "";
-                    
-                    // Verificação estrita apenas via Firebase Realtime Database
                     const sanitizedEmail = sanitizeEmailForFirebase(userEmail);
-                    const adminRef = ref(db, `admins/${sanitizedEmail}`);
-                    const snapshot = await get(adminRef);
-                    const isDbAdmin = snapshot.exists() && snapshot.val() === true;
+                    
+                    let isDbAdmin = false;
+                    
+                    try {
+                        // Verificação estrita via Realtime Database com segurança contra exceções
+                        const adminRef = ref(db, `admins/${sanitizedEmail}`);
+                        const snapshot = await get(adminRef);
+                        isDbAdmin = snapshot.exists() && snapshot.val() === true;
+                    } catch (error) {
+                        console.error("Erro ou permissão negada ao ler a lista de administradores:", error);
+                        isDbAdmin = false;
+                    }
 
                     if (isDbAdmin) {
                         state.isAdmin = true;
@@ -226,7 +237,7 @@
                         state.isAdmin = false;
                         state.user = null;
                         await signOut(auth);
-                        showToast("Acesso Negado: Esta conta não tem privilégios administrativos no ecossistema GL Hub.", "error");
+                        showToast("Acesso Negado: A sua conta não está listada como administrador nas regras de segurança.", "error");
                     }
                 } else {
                     state.user = null;
@@ -243,45 +254,50 @@
         // SUBSCRIPÇÕES DO FIREBASE (EM TEMPO REAL)
         // ==========================================
         function setupDatabaseListeners() {
+            const handleSubscriptionError = (path, err) => {
+                console.error(`Erro de permissão no canal ${path}:`, err);
+                showToast(`Sem permissão para carregar dados do canal: ${path}`, "error");
+            };
+
             // Monitorizar Aplicações
             dbListeners.push(onValue(ref(db, 'apps'), s => { 
                 state.stats.apps = s.size; 
                 state.data.apps = s.exists() ? Object.entries(s.val()).map(([id, val]) => ({id, ...val})) : [];
                 if (['dashboard', 'apps'].includes(state.activeRoute)) renderContent();
-            }));
+            }, err => handleSubscriptionError('apps', err)));
 
             // Monitorizar Sites
             dbListeners.push(onValue(ref(db, 'sites'), s => { 
                 state.stats.sites = s.size; 
                 state.data.sites = s.exists() ? Object.entries(s.val()).map(([id, val]) => ({id, ...val})) : [];
                 if (['dashboard', 'sites'].includes(state.activeRoute)) renderContent();
-            }));
+            }, err => handleSubscriptionError('sites', err)));
 
             // Monitorizar Categorias
             dbListeners.push(onValue(ref(db, 'categories'), s => { 
                 state.stats.categories = s.size; 
                 state.data.categories = s.exists() ? Object.entries(s.val()).map(([id, val]) => ({id, ...val})) : [];
                 if (['dashboard', 'categories'].includes(state.activeRoute)) renderContent();
-            }));
+            }, err => handleSubscriptionError('categories', err)));
 
             // Monitorizar Novidades
             dbListeners.push(onValue(ref(db, 'news'), s => { 
                 state.stats.news = s.size; 
                 state.data.news = s.exists() ? Object.entries(s.val()).map(([id, val]) => ({id, ...val})) : [];
                 if (['dashboard', 'news'].includes(state.activeRoute)) renderContent();
-            }));
+            }, err => handleSubscriptionError('news', err)));
 
             // Monitorizar Configurações Globais
             dbListeners.push(onValue(ref(db, 'settings'), s => { 
                 state.data.settings = s.exists() ? s.val() : {};
                 if (state.activeRoute === 'settings') renderContent();
-            }));
+            }, err => handleSubscriptionError('settings', err)));
 
             // Contagem de Utilizadores Totais
             dbListeners.push(onValue(ref(db, 'users'), s => { 
                 state.stats.users = s.size; 
                 if (state.activeRoute === 'dashboard') renderContent(); 
-            }));
+            }, err => console.log('O canal de utilizadores requer privilégios superiores:', err)));
 
             // Logs Recentes
             dbListeners.push(onValue(ref(db, 'logs'), s => {
@@ -292,7 +308,7 @@
                     state.stats.recentLogs = allLogs.slice(0, 5);
                     if (['dashboard', 'logs'].includes(state.activeRoute)) renderContent();
                 }
-            }));
+            }, err => handleSubscriptionError('logs', err)));
         }
 
         function clearDatabaseListeners() {
