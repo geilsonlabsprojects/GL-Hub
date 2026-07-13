@@ -210,16 +210,13 @@
                 if (currentUser) {
                     const userEmail = currentUser.email ? currentUser.email.toLowerCase() : "";
                     
-                    // 1. Verificação do e-mail mestre absoluto
-                    const isMasterAdmin = (userEmail === 'geilsomcarlos93@gmail.com');
-                    
-                    // 2. Verificação no nó admins/{email_com} do Realtime Database
+                    // Verificação estrita apenas via Firebase Realtime Database
                     const sanitizedEmail = sanitizeEmailForFirebase(userEmail);
                     const adminRef = ref(db, `admins/${sanitizedEmail}`);
                     const snapshot = await get(adminRef);
                     const isDbAdmin = snapshot.exists() && snapshot.val() === true;
 
-                    if (isMasterAdmin || isDbAdmin) {
+                    if (isDbAdmin) {
                         state.isAdmin = true;
                         state.user = currentUser;
                         setupDatabaseListeners();
