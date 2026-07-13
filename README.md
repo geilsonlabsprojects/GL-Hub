@@ -1,7 +1,7 @@
 # GL Hub
 
 <p align="center">
-  <img src="docs/logo.png" width="150" alt="GL Hub Logo">
+  <img src="docs/GL Hub.png" width="150" alt="GL Hub Logo">
 </p>
 
 <p align="center">
