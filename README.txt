@@ -1,0 +1,1 @@
+Substitua a variável APK_URL em js/script.js pela URL da release.
